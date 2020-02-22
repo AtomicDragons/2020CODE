@@ -14,87 +14,100 @@ import com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX;
 import com.ctre.phoenix.motorcontrol.can.WPI_VictorSPX;
 import edu.wpi.first.wpilibj.SpeedControllerGroup;
 import edu.wpi.first.wpilibj.drive.DifferentialDrive;
+import edu.wpi.first.wpilibj.DriverStation;
+import edu.wpi.first.wpilibj.I2C;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.SPI;
+import edu.wpi.first.wpilibj.util.Color;
 
 import com.kauailabs.navx.frc.AHRS;
+import com.revrobotics.*;
 
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.networktables.NetworkTable;
 import edu.wpi.first.networktables.NetworkTableEntry;
 import edu.wpi.first.networktables.NetworkTableInstance;
 
-/**
- * The VM is configured to automatically run this class, and to call the
- * functions corresponding to each mode, as described in the TimedRobot
- * documentation. If you change the name of this class or the package after
- * creating this project, you must also update the build.gradle file in the
- * project.
- */
+import edu.wpi.first.wpilibj.AnalogInput;     
+
 public class Robot extends TimedRobot {
 
+  //For selecting different auton strategies
   private static final String kRightAuto = "Right Start";
   private static final String kCenterAuto = "Center Start";
   private static final String kLeftAuto = "Left Start";
 
   private final SendableChooser<String> m_autoChooser = new SendableChooser<>();
+  private String m_autoSelected;
 
+  //gyro
   AHRS imu;
 
+  //drivetrain stuff
   WPI_TalonSRX frontLeft;
 	WPI_VictorSPX backRight;
 	WPI_TalonSRX frontRight;
   WPI_VictorSPX backLeft;
 
-  WPI_VictorSPX outtakeLeft;
-  WPI_VictorSPX outtakeRight;
-
   SpeedControllerGroup leftMotors;
   SpeedControllerGroup rightMotors;
-  SpeedControllerGroup wheelMotors;
 
-  Map map = new Map();
-  
-	
   DifferentialDrive drive;
 	
   Joystick driveStick;
 
+  //shooter motors
+  WPI_VictorSPX shooterTop;
+  WPI_VictorSPX shooterBot;
+
+  //map of port numbers
+  Map map = new Map();
+  
+  //for determining if drivetrain going forward/backward
   public int LEFT_SIGN_MULTIPLIER;
   public int RIGHT_SIGN_MULTIPLIER;  
 
-  
+  //vision booleans
   boolean isClose;
   boolean isAlligningRight;
   boolean isAlligningLeft;
 
+  //boolean for testing 
   boolean gyroIsReset;
 
+  //for vision alligning
   double previousArea = 0;
   double previousSkew = 0;
 
- 
-  enum AutoMode{
-    kLeftAuto, kCenterAuto, kRightAuto
-  }
+  //different stages of auton
   enum AutoStage{
-    turnOne, driveOne
+    begin, shootOne, turnOne, driveOne, turnTwo, driveTwo, end
   }
 
-  AutoMode mode;
   AutoStage stage;
 
-  /**
-   * This function is run when the robot is first started up and should be
-   * used for any initialization code.
-   */
+  //count for how long robot is in acceptble threshhold for pid
+  int countsInThreshold = 0;
+
+  //color sensor stuff
+  private final I2C.Port i2cPort = I2C.Port.kOnboard;
+  //IMPORTANT:MAKE SURE LED ON COLOR SENSOR IS OFF
+  private final ColorSensorV3 colorSensor = new ColorSensorV3(i2cPort);
+  private final ColorMatch colorMatcher = new ColorMatch();
+
+  private final Color kBlueTarget = ColorMatch.makeColor(0.202,0.483,0.314);
+  private final Color kGreenTarget = ColorMatch.makeColor(0.252,0.563,0.184);
+  private final Color kRedTarget = ColorMatch.makeColor(0.638,0.294,0.067);
+  private final Color kYellowTarget = ColorMatch.makeColor(0.428,0.492,0.079);
+
+  //color given by game
+  String posCtrlColor = "";
+
+  AnalogInput beamBreakSensor1;
+  double bbs1Voltage;
+
   @Override
   public void robotInit() {
-
-    isClose = false;
-    gyroIsReset = false; 
-    isAlligningLeft = false;
-    isAlligningRight = false;
 
     m_autoChooser.setDefaultOption("Center Auto", kCenterAuto);
     m_autoChooser.addOption("Left Auto", kLeftAuto);
@@ -109,59 +122,98 @@ public class Robot extends TimedRobot {
 		leftMotors = new SpeedControllerGroup (frontLeft, backLeft);
     rightMotors = new SpeedControllerGroup (frontRight, backRight);
 
-    outtakeLeft = new WPI_VictorSPX(map.LEFT_OUTTAKE_PORT);
-    outtakeRight = new WPI_VictorSPX(map.RIGHT_OUTTAKE_PORT);
+    shooterTop = new WPI_VictorSPX(map.TOP_SHOOTER_PORT);
+    shooterBot = new WPI_VictorSPX(map.BOT_SHOOTER_PORT);
+
+    beamBreakSensor1 = new AnalogInput(map.BBS_1_PORT);
 
     imu = new AHRS(SPI.Port.kMXP);
 
+    colorMatcher.addColorMatch(kBlueTarget);
+    colorMatcher.addColorMatch(kGreenTarget);
+    colorMatcher.addColorMatch(kRedTarget);
+    colorMatcher.addColorMatch(kYellowTarget);
 		
 		drive = new DifferentialDrive (leftMotors, rightMotors);
 		drive.setSafetyEnabled(false);    
 
     driveStick = new Joystick(map.DRIVESTICK_PORT);
 
- 
-  }
+    stage = AutoStage.begin;
 
-  /**
-   * This function is called every robot packet, no matter the mode. Use
-   * this for items like diagnostics that you want ran during disabled,
-   * autonomous, teleoperated and test.
-   *
-   * <p>This runs after the mode specific periodic functions, but before
-   * LiveWindow and SmartDashboard integrated updating.
-   */
+    isClose = false;
+    gyroIsReset = false; 
+    isAlligningLeft = false;
+    isAlligningRight = false;
+
+  }
   @Override
   public void robotPeriodic() {
+    //for getting color sent during competitions
+    String gameData;
+    gameData = DriverStation.getInstance().getGameSpecificMessage();
+    if(gameData.length()>0){
+      switch(gameData.charAt(0)){
+        case 'R':
+          posCtrlColor = "Red";
+          break;
+        case 'G':
+          posCtrlColor = "Green";
+          break;
+        case 'B':
+          posCtrlColor = "Blue";
+          break;
+        case 'Y':
+          posCtrlColor = "Yellow";
+          break;
+        default:
+          break;
+      }
+    }
+    Color detectedColor = colorSensor.getColor();
+
+    String detectedColorString;
+    ColorMatchResult match = colorMatcher.matchClosestColor(detectedColor);
+
+    if(match.color == kBlueTarget){
+      detectedColorString = "Blue";
+    }
+    else if(match.color == kRedTarget){
+      detectedColorString = "Red";
+    }
+    else if(match.color == kGreenTarget){
+      detectedColorString = "Green";
+    }
+    else if(match.color == kYellowTarget){
+      detectedColorString = "Yellow";
+    }
+    else{
+      detectedColorString = "Unknown";
+    }
+    SmartDashboard.putNumber("Red", detectedColor.red);
+    SmartDashboard.putNumber("Green", detectedColor.green);
+    SmartDashboard.putNumber("Blue", detectedColor.blue);
+    SmartDashboard.putString("Detected Color", detectedColorString);
+
+    bbs1Voltage = beamBreakSensor1.getVoltage();
+    SmartDashboard.putNumber("Beam Break 1", bbs1Voltage);
   }
 
-  /**
-   * This autonomous (along with the chooser code above) shows how to select
-   * between different autonomous modes using the dashboard. The sendable
-   * chooser code works with the Java SmartDashboard. If you prefer the
-   * LabVIEW Dashboard, remove all of the chooser code and uncomment the
-   * getString line to get the auto name from the text box below the Gyro
-   *
-   * <p>You can add additional auto modes by adding additional comparisons to
-   * the switch structure below with additional strings. If using the
-   * SendableChooser make sure to add them to the chooser code above as well.
-   */
   @Override
   public void autonomousInit() {
-    m_autoSelected = m_chooser.getSelected();
-    // m_autoSelected = SmartDashboard.getString("Auto Selector", kDefaultAuto);
+    m_autoSelected = m_autoChooser.getSelected();
     System.out.println("Auto selected: " + m_autoSelected);
+    resetGyro();   
   }
 
-  /**
-   * This function is called periodically during autonomous.
-   */
   @Override
   public void autonomousPeriodic() {
    
+    SmartDashboard.putNumber("Angle", imu.getAngle());
+
     switch (m_autoSelected) {
       case kCenterAuto:
-        // Put custom auto code here
+        centerAuto();
         break;
       case kRightAuto:
         break;
@@ -173,13 +225,10 @@ public class Robot extends TimedRobot {
     }
   }
 
-  /**
-   * This function is called periodically during operator control.
-   */
   @Override
   public void teleopPeriodic() {
 
-    visionTracking();
+    //visionTracking();
 
     if(driveStick.getRawAxis(1)<0){
       LEFT_SIGN_MULTIPLIER = 1;
@@ -196,12 +245,12 @@ public class Robot extends TimedRobot {
     }
     
     if(driveStick.getRawAxis(4)>.15){
-      outtakeRight.set(Math.pow(driveStick.getRawAxis(4),4));
-      outtakeLeft.set(-Math.pow(driveStick.getRawAxis(4),4));
+      shooterTop.set(Math.pow(driveStick.getRawAxis(4),4));
+      shooterBot.set(-Math.pow(driveStick.getRawAxis(4),4));
     }
     else{
-      outtakeRight.set(0);
-      outtakeLeft.set(0);
+      shooterTop.set(0);
+      shooterBot.set(0);
     }
     
     if(!gyroIsReset){
@@ -218,20 +267,15 @@ public class Robot extends TimedRobot {
     }
     */
 
-    
+    //for operating tank drive
     if(driveStick.getRawAxis(1)>.15 || driveStick.getRawAxis(5)>.15 || driveStick.getRawAxis(1)<-.15 || driveStick.getRawAxis(5)<-.15 ){
       drive.tankDrive(Math.pow((driveStick.getRawAxis(1)),4) * LEFT_SIGN_MULTIPLIER, Math.pow((driveStick.getRawAxis(5)),4) * RIGHT_SIGN_MULTIPLIER);
     }
     else if(!isAlligningRight && !isAlligningLeft){
       drive.tankDrive(0,0);
     }
-    
-    
   }
 
-  /**
-   * This function is called periodically during test mode.
-   */
   @Override
   public void testPeriodic() {
   }
@@ -261,18 +305,14 @@ public class Robot extends TimedRobot {
 
     SmartDashboard.putNumber("Angle", imu.getAngle());
 
-    System.out.println(skew);
-    //System.out.println(Math.abs(previousSkew-skew));
-    //System.out.println(area);
+    //being alligning once button is clicking based on orientation of robot
     if(driveStick.getRawButton(2)){
-      System.out.println("button hello");
       if(imu.getAngle()<0){
         isAlligningRight = true;
       }
       else{
         isAlligningLeft = true;
       }
-     
     }
     if(isAlligningRight){
       drive.tankDrive(.4,-.4);
@@ -295,4 +335,105 @@ public class Robot extends TimedRobot {
     previousArea = area;
     previousSkew = skew;
   }
+public void centerAuto(){
+  switch(stage){
+    case begin:
+      stage = AutoStage.shootOne;
+      break;
+    case shootOne:
+      if(!shoot()){   
+      }
+      else{
+        stage = AutoStage.turnOne;
+      }
+      break;
+    case turnOne:
+      if(!turnToAngle(-90)){
+      }
+      else{
+        stage = AutoStage.driveOne;
+      }
+      break;
+    case driveOne:
+      if(!driveToDistance(169.95)){
+      }
+      else{
+        stage = AutoStage.turnTwo;
+      }
+      break;
+    case turnTwo:
+      if(!turnToAngle(90)){
+      }
+      else{
+        stage = AutoStage.driveTwo;
+      }
+      break;
+    case driveTwo:
+      if(!driveToDistance(495)){
+        intake(true);
+      }
+      else{
+        intake(false);
+        stage = AutoStage.end;
+      }
+      break;
+    case end:
+      break;
+    default:
+      break;
+  }
 }
+public boolean driveToDistance(double targetDistance){
+  return false;
+}
+public boolean turnToAngle(double targetAngle){
+    double currentAngle = imu.getAngle();
+    double error = targetAngle - currentAngle;
+    double fullSpeedThreshold = 30;
+    double targetThreshold = 5;
+    int dir;
+    double kp = .02;
+
+    //makes direction positive if target angle is negative
+    if(targetAngle < 0) {
+      dir = 1;
+    } else {
+      dir = -1;
+    }
+
+    //changes direction if robot overshoots target
+    if((targetAngle>0&&error<0)||(targetAngle<0&&error>0)){
+      dir = -dir;
+    }
+    //"full" speed if angle above full speed threshold
+    if(Math.abs(error) > fullSpeedThreshold){
+      drive.tankDrive(-.5 * dir, .5 * dir);
+      return false;
+    }
+    //pid speed if angle above acceptable targetThreshold
+    else if(Math.abs(error) > targetThreshold){
+      drive.tankDrive(-Math.abs(error) * kp * dir, Math.abs(error) * kp * dir);
+      return false;
+    }
+    //stops robot
+    else{     
+      drive.tankDrive(0, 0);
+      countsInThreshold++;
+      //if robot in threshold for 5 iterations, method terminates
+      if(countsInThreshold==5){
+        return true;
+      }
+      return false;
+    }
+  }
+  public void updateConveyor(){
+
+  }
+  public boolean shoot(){
+    return true;
+  }
+  public void intake(boolean turnOn){
+
+  }
+}
+
