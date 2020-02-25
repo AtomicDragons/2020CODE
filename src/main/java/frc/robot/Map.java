@@ -11,6 +11,14 @@ public class Map{
     public static final int BOT_SHOOTER_PORT = 2;
 
     public static final int BBS_1_PORT = 3;
-    
-    public static final int DRIVE_STICK_OUTTAKE = 8; 
+    public static final int BBS_2_PORT = 2;
+    public static final int BBS_3_PORT = 1;
+    public static final int BBS_4_PORT = 0;
+
+    public static final int LIMIT_INTAKE_PORT = 0;
+
+    public static final int DRIVE_STICK_POS_CTRL = 1;//[] on controller
+    public static final int DRIVE_STICK_SHOOTER = 2;//X on controller
+    public static final int DRIVE_STICK_INTAKE = 3;//O on controller
+    public static final int DRIVE_STICK_ROT_CTRL = 3;//^ on controller
 }

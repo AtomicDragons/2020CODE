@@ -17,6 +17,7 @@ import edu.wpi.first.wpilibj.drive.DifferentialDrive;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.I2C;
 import edu.wpi.first.wpilibj.Joystick;
+import edu.wpi.first.wpilibj.DigitalInput;
 import edu.wpi.first.wpilibj.SPI;
 import edu.wpi.first.wpilibj.util.Color;
 
@@ -71,6 +72,28 @@ public class Robot extends TimedRobot {
   boolean isClose;
   boolean isAlligningRight;
   boolean isAlligningLeft;
+  
+  //intake
+  boolean intakeIsRunning;
+
+  int countsToTurnOnIntakeDuringAuton = 0;
+
+  //color wheel
+  boolean checkingForRotCtrl;
+  boolean checkingForPosCtrl;
+
+  int countOfSameColor = 0;
+  String colorChosenForRotCtrl = "";
+  int dirForPosCtrl = 1;
+
+  String[] colors = {"Red", "Green", "Blue", "Yellow"};
+
+  //belly
+  boolean conveyorIsRunning;
+  boolean preppingShoot;
+
+  int countsForShooter = 0;
+  int countsForDelay = 0;
 
   //boolean for testing 
   boolean gyroIsReset;
@@ -103,8 +126,14 @@ public class Robot extends TimedRobot {
   //color given by game
   String posCtrlColor = "";
 
+  //current color picked up by sensor
+  String detectedColorString;
+
+  DigitalInput limitIntake;
   AnalogInput beamBreakSensor1;
-  double bbs1Voltage;
+  AnalogInput beamBreakSensor2;
+  AnalogInput beamBreakSensor3;
+  AnalogInput beamBreakSensor4;
 
   @Override
   public void robotInit() {
@@ -126,6 +155,11 @@ public class Robot extends TimedRobot {
     shooterBot = new WPI_VictorSPX(map.BOT_SHOOTER_PORT);
 
     beamBreakSensor1 = new AnalogInput(map.BBS_1_PORT);
+    beamBreakSensor2 = new AnalogInput(map.BBS_2_PORT);
+    beamBreakSensor3 = new AnalogInput(map.BBS_3_PORT);
+    beamBreakSensor4 = new AnalogInput(map.BBS_4_PORT);
+
+    limitIntake = new DigitalInput(map.LIMIT_INTAKE_PORT);
 
     imu = new AHRS(SPI.Port.kMXP);
 
@@ -146,6 +180,13 @@ public class Robot extends TimedRobot {
     isAlligningLeft = false;
     isAlligningRight = false;
 
+    conveyorIsRunning = false;
+    preppingShoot = false;
+
+    intakeIsRunning = false;
+
+    checkingForPosCtrl = false;
+    checkingForRotCtrl = false;
   }
   @Override
   public void robotPeriodic() {
@@ -172,7 +213,6 @@ public class Robot extends TimedRobot {
     }
     Color detectedColor = colorSensor.getColor();
 
-    String detectedColorString;
     ColorMatchResult match = colorMatcher.matchClosestColor(detectedColor);
 
     if(match.color == kBlueTarget){
@@ -194,23 +234,35 @@ public class Robot extends TimedRobot {
     SmartDashboard.putNumber("Green", detectedColor.green);
     SmartDashboard.putNumber("Blue", detectedColor.blue);
     SmartDashboard.putString("Detected Color", detectedColorString);
+    SmartDashboard.putNumber("BEAM", beamBreakSensor1.getVoltage());
 
-    bbs1Voltage = beamBreakSensor1.getVoltage();
-    SmartDashboard.putNumber("Beam Break 1", bbs1Voltage);
+    if(driveStick.getRawButton(map.DRIVE_STICK_INTAKE)){
+      if(!intakeIsRunning){
+        intake(true);
+        intakeIsRunning = true;
+      }
+      else{
+        intake(false);
+        intakeIsRunning = false;
+      }
+    }
   }
-
   @Override
   public void autonomousInit() {
     m_autoSelected = m_autoChooser.getSelected();
     System.out.println("Auto selected: " + m_autoSelected);
     resetGyro();   
+    intake(true);
+   
   }
-
   @Override
   public void autonomousPeriodic() {
    
-    SmartDashboard.putNumber("Angle", imu.getAngle());
+    countsToTurnOnIntakeDuringAuton++;
 
+    if(countsToTurnOnIntakeDuringAuton>=500){
+      intake(false);
+    }
     switch (m_autoSelected) {
       case kCenterAuto:
         centerAuto();
@@ -273,6 +325,60 @@ public class Robot extends TimedRobot {
     }
     else if(!isAlligningRight && !isAlligningLeft){
       drive.tankDrive(0,0);
+    }
+
+    //rot control
+    if(driveStick.getRawButton(map.DRIVE_STICK_ROT_CTRL)&&detectedColorString!="Unknown"){
+        checkingForRotCtrl = true;
+        colorChosenForRotCtrl = detectedColorString;
+    }
+    //pos control
+    if(driveStick.getRawButton(map.DRIVE_STICK_POS_CTRL)&&detectedColorString!="Unknown"){
+      checkingForPosCtrl = true;
+      int currentColorPos = 0;
+      int targetColorPos = 0;
+      //figures out the optimal direction to turn the wheel to the target color
+      for(int i = 0;i<colors.length;i++){
+        if(colors[i].equals(detectedColorString)){
+          currentColorPos = i;
+        }
+        else if(colors[i].equals(posCtrlColor)){
+          targetColorPos = i;
+        }
+      }
+      int distanceRight = targetColorPos - currentColorPos;
+      int distanceLeft = currentColorPos - targetColorPos;
+      if(distanceRight == -3) distanceRight = 1;
+      else if(distanceRight == -2) distanceRight = 2;
+      else if(distanceRight == -1) distanceRight = 3;
+      if(distanceLeft == -3) distanceLeft = 1;
+      else if(distanceLeft == -2) distanceLeft = 2;
+      else if(distanceLeft == -1) distanceLeft = 3;
+
+      if(distanceRight<=distanceLeft){
+        dirForPosCtrl = -1;
+      }
+      else{
+        dirForPosCtrl = 1;
+      }
+    }
+    if(checkingForRotCtrl){
+      //RUN COLOR WHEEL MOTORS
+      if(detectedColorString.equals(colorChosenForRotCtrl)){
+        countOfSameColor++;
+      }
+      if(countOfSameColor>=7){
+        //STOP COLOR WHEEL MOTORS
+        checkingForRotCtrl = false;
+        countOfSameColor = 0;
+      }
+    }
+    if(checkingForPosCtrl){
+      //RUN COLOR WHEEL MOTORS * dirForPosCtrl
+      if(detectedColorString.equals(posCtrlColor)){
+        //STOP COLOR WHEEL MOTORS
+        checkingForRotCtrl = false;
+      }
     }
   }
 
@@ -341,12 +447,15 @@ public void centerAuto(){
       stage = AutoStage.shootOne;
       break;
     case shootOne:
-      if(!shoot()){   
-      }
-      else{
+      shooter(true);
+      countsForShooter++;
+      if(countsForShooter>=150){
+        shooter(false);
+        countsForShooter = 0;
         stage = AutoStage.turnOne;
       }
       break;
+      
     case turnOne:
       if(!turnToAngle(-90)){
       }
@@ -426,14 +535,71 @@ public boolean turnToAngle(double targetAngle){
       return false;
     }
   }
-  public void updateConveyor(){
-
+  public void updateConveyor(boolean duringAuton){
+    //after 3 seconds, ball has been shot
+    if(countsForShooter >= 150){//test actual time it takes to shoot ball from falling into ramp
+      shooter(false);
+      preppingShoot = false;
+      countsForShooter = 0;
+    }
+    if(preppingShoot){
+      countsForShooter++;
+    }
+    if(checkBeam(beamBreakSensor4)){
+      //click shoot button
+      if(driveStick.getRawButton(map.DRIVE_STICK_SHOOTER)){
+        shooter(true);
+        //move conveyors
+        conveyorIsRunning = true;
+        preppingShoot = true;
+      }
+      //turns on shooter if ball at top spot during auton
+      else if(duringAuton&&!preppingShoot){
+        shooter(true);
+        //move conveyors
+        conveyorIsRunning = true;
+        preppingShoot = true;
+      }
+    }
+    //runs motors if ball in intake cavity and no ball in top spot
+    if(limitIntake.get()&&!checkBeam(beamBreakSensor4)){
+      //move conveyors
+      conveyorIsRunning = true;
+    }
+    if(conveyorIsRunning){
+      //delay for when balls initially move
+      countsForDelay++;
+      if(countsForDelay>=50){
+        //stops conveyor when any sensor is triggered
+        if(checkBeam(beamBreakSensor4)||checkBeam(beamBreakSensor3)||checkBeam(beamBreakSensor2)||checkBeam(beamBreakSensor1)){
+          //stop conveyor
+          conveyorIsRunning = false;
+          countsForDelay = 0;
+        }
+      }
+    }
   }
-  public boolean shoot(){
-    return true;
+  public void shooter(boolean turnOn){
+    if(turnOn){
+
+    }
+    else{
+
+    }
   }
   public void intake(boolean turnOn){
+    if(turnOn){
 
+    }
+    else{
+      
+    }
+  }
+  public boolean checkBeam(AnalogInput sensor){
+    if(sensor.getVoltage()>0.2){
+      return true;
+    }
+    return false;
   }
 }
 
