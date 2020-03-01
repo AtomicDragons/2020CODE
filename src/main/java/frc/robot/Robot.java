@@ -10,19 +10,27 @@ package frc.robot;
 import edu.wpi.first.wpilibj.TimedRobot;
 import edu.wpi.first.wpilibj.smartdashboard.SendableChooser;
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
+import edu.wpi.first.wpilibj.Compressor;
 import com.ctre.phoenix.motorcontrol.can.WPI_TalonSRX;
 import com.ctre.phoenix.motorcontrol.can.WPI_VictorSPX;
+import com.ctre.phoenix.motorcontrol.can.WPI_TalonFX;
+import com.ctre.phoenix.motorcontrol.Faults;
+import com.ctre.phoenix.motorcontrol.InvertType;
+import com.ctre.phoenix.motorcontrol.TalonFXInvertType;
 import edu.wpi.first.wpilibj.SpeedControllerGroup;
 import edu.wpi.first.wpilibj.drive.DifferentialDrive;
 import edu.wpi.first.wpilibj.DriverStation;
 import edu.wpi.first.wpilibj.I2C;
 import edu.wpi.first.wpilibj.Joystick;
 import edu.wpi.first.wpilibj.DigitalInput;
+import edu.wpi.first.wpilibj.DoubleSolenoid;
 import edu.wpi.first.wpilibj.SPI;
 import edu.wpi.first.wpilibj.util.Color;
 
 import com.kauailabs.navx.frc.AHRS;
 import com.revrobotics.*;
+import com.revrobotics.CANSparkMax;
+import com.revrobotics.CANSparkMaxLowLevel.MotorType;
 
 import edu.wpi.first.wpilibj.smartdashboard.SmartDashboard;
 import edu.wpi.first.networktables.NetworkTable;
@@ -43,23 +51,30 @@ public class Robot extends TimedRobot {
 
   //gyro
   AHRS imu;
+  
+  //belly
+  CANSparkMax belly_1;
+  CANSparkMax belly_2;
+  CANSparkMax shooterTop;
+  CANSparkMax shooterBottom;
+  CANSparkMax intake;
+  CANSparkMax colorWheel;
+  CANSparkMax climberArm;
 
   //drivetrain stuff
-  WPI_TalonSRX frontLeft;
-	WPI_VictorSPX backRight;
-	WPI_TalonSRX frontRight;
-  WPI_VictorSPX backLeft;
+  WPI_TalonFX rightFront;
+  WPI_TalonFX rightCenter;
+  WPI_TalonFX rightBack;
+  WPI_TalonFX leftFront;
+  WPI_TalonFX leftCenter;
+  WPI_TalonFX leftBack;
 
-  SpeedControllerGroup leftMotors;
-  SpeedControllerGroup rightMotors;
+  Faults faultsR = new Faults();
+  Faults faultsL = new Faults();
 
   DifferentialDrive drive;
 	
   Joystick driveStick;
-
-  //shooter motors
-  WPI_VictorSPX shooterTop;
-  WPI_VictorSPX shooterBot;
 
   //map of port numbers
   Map map = new Map();
@@ -68,11 +83,15 @@ public class Robot extends TimedRobot {
   public int LEFT_SIGN_MULTIPLIER;
   public int RIGHT_SIGN_MULTIPLIER;  
 
-  //vision booleans
+  //vision
   boolean isClose;
-  boolean isAlligningRight;
-  boolean isAlligningLeft;
+  boolean targetIsInframe;
+  boolean isAlligning;
   
+  //for vision alligning
+  double previousArea = 0;
+  double previousSkew = 0;
+
   //intake
   boolean intakeIsRunning;
 
@@ -98,13 +117,9 @@ public class Robot extends TimedRobot {
   //boolean for testing 
   boolean gyroIsReset;
 
-  //for vision alligning
-  double previousArea = 0;
-  double previousSkew = 0;
-
   //different stages of auton
   enum AutoStage{
-    begin, shootOne, turnOne, driveOne, turnTwo, driveTwo, end
+    begin, allign, shootOne, turnOne, driveOne, turnTwo, driveTwo, end
   }
 
   AutoStage stage;
@@ -129,12 +144,42 @@ public class Robot extends TimedRobot {
   //current color picked up by sensor
   String detectedColorString;
 
+  //sensors
   DigitalInput limitIntake;
   AnalogInput beamBreakSensor1;
   AnalogInput beamBreakSensor2;
   AnalogInput beamBreakSensor3;
   AnalogInput beamBreakSensor4;
 
+  //vision data
+  NetworkTable table;
+  NetworkTableEntry tx;
+  NetworkTableEntry ty;
+  NetworkTableEntry ta;
+  NetworkTableEntry ts;
+
+  double vision_x;
+  double vision_y;
+  double vision_area;
+  double vision_skew;
+
+  //solenoids
+  DoubleSolenoid colorWheelSully;
+  DoubleSolenoid releaseClimberSully;
+  DoubleSolenoid highGearSully1;
+  DoubleSolenoid highGearSully2;
+  DoubleSolenoid climbUpSully1;
+  DoubleSolenoid climbUpSully2;
+
+  Compressor compressor;
+
+  boolean isHighGear;
+  boolean colorWheelArmIsRaised;
+
+  //climber
+  int countsForPiston = 0;
+  int countsForClimberMotor = 0;
+  
   @Override
   public void robotInit() {
 
@@ -143,22 +188,73 @@ public class Robot extends TimedRobot {
     m_autoChooser.addOption("Right Auto", kRightAuto);
     SmartDashboard.putData("Auto Choices", m_autoChooser);    
 
-    backRight = new WPI_VictorSPX(map.BACK_RIGHT_MOTOR_PORT);
-    frontLeft = new WPI_TalonSRX(map.FRONT_LEFT_MOTOR_PORT);
-		frontRight = new WPI_TalonSRX(map.FRONT_RIGHT_MOTOR_PORT);
-    backLeft = new WPI_VictorSPX(map.BACK_LEFT_MOTOR_PORT);
+    /*
+    rightFront = new WPI_TalonFX(map.FRONT_RIGHT_MOTOR_PORT);
+    rightCenter = new WPI_TalonFX(map.CENTER_RIGHT_MOTOR_PORT);
+    rightBack = new WPI_TalonFX(map.BACK_RIGHT_MOTOR_PORT);
+    leftFront = new WPI_TalonFX(map.FRONT_LEFT_MOTOR_PORT);
+    leftCenter = new WPI_TalonFX(map.CENTER_LEFT_MOTOR_PORT);
+    leftBack = new WPI_TalonFX(map.BACK_LEFT_MOTOR_PORT);
 
-		leftMotors = new SpeedControllerGroup (frontLeft, backLeft);
-    rightMotors = new SpeedControllerGroup (frontRight, backRight);
+    rightFront.configFactoryDefault();
+    rightCenter.configFactoryDefault();
+    rightBack.configFactoryDefault();
+    leftFront.configFactoryDefault();
+    leftCenter.configFactoryDefault();
+    leftBack.configFactoryDefault();
 
-    shooterTop = new WPI_VictorSPX(map.TOP_SHOOTER_PORT);
-    shooterBot = new WPI_VictorSPX(map.BOT_SHOOTER_PORT);
+    rightCenter.follow(rightFront);
+    rightBack.follow(rightFront);
+    leftCenter.follow(leftFront);
+    leftBack.follow(leftFront);
 
+    rightFront.setInverted(TalonFXInvertType.Clockwise);
+    leftFront.setInverted(TalonFXInvertType.Clockwise);
+
+    rightCenter.setInverted(TalonFXInvertType.FollowMaster);
+    rightBack.setInverted(TalonFXInvertType.FollowMaster);
+    leftCenter.setInverted(TalonFXInvertType.FollowMaster);
+    leftBack.setInverted(TalonFXInvertType.FollowMaster);
+    */
+
+    belly_1 = new CANSparkMax(map.BELLY_1_MOTOR_PORT, MotorType.kBrushless);
+    belly_2 = new CANSparkMax(map.BELLY_2_MOTOR_PORT, MotorType.kBrushless);
+    shooterTop = new CANSparkMax(map.TOP_SHOOTER_MOTOR_PORT, MotorType.kBrushless);
+    shooterBottom = new CANSparkMax(map.BOT_SHOOTER_MOTOR_PORT, MotorType.kBrushless);
+    intake = new CANSparkMax(map.INTAKE_MOTOR_PORT, MotorType.kBrushless);
+
+    /*
+    colorWheel = new CANSparkMax(map.COLOR_WHEEL_MOTOR_PORT, MotorType.kBrushless);
+    climberArm = new CANSparkMax(map.CLIMBER_ARM_MOTOR_PORT, MotorType.kBrushless);
+    */
+  
+    
+    belly_1.restoreFactoryDefaults();
+    belly_2.restoreFactoryDefaults();
+    shooterTop.restoreFactoryDefaults();
+    shooterBottom.restoreFactoryDefaults();
+    intake.restoreFactoryDefaults();
+    /*
+    colorWheel.restoreFactoryDefaults();
+    climberArm.restoreFactoryDefaults();
+    */
+  
     beamBreakSensor1 = new AnalogInput(map.BBS_1_PORT);
     beamBreakSensor2 = new AnalogInput(map.BBS_2_PORT);
     beamBreakSensor3 = new AnalogInput(map.BBS_3_PORT);
     beamBreakSensor4 = new AnalogInput(map.BBS_4_PORT);
 
+    //compressor = new Compressor(map.COMPRESSOR_PORT);
+
+    //CHANGE THE PARAMETERS!!!!!!!!!<==============================================
+    /*
+    colorWheelSully = new DoubleSolenoid(0,map.COLOR_WHEEL_SULLY_PORT, map.COLOR_WHEEL_SULLY_PORT + 1);
+    releaseClimberSully = new DoubleSolenoid(10,map.RELEASE_CLIMBER_SULLY_PORT,map.RELEASE_CLIMBER_SULLY_PORT+1);
+    highGearSully1 = new DoubleSolenoid(10,map.HIGH_GEAR_SULLY_1_PORT,map.HIGH_GEAR_SULLY_1_PORT+1);
+    highGearSully2 = new DoubleSolenoid(10,map.HIGH_GEAR_SULLY_2_PORT,map.HIGH_GEAR_SULLY_2_PORT+1);
+    climbUpSully1 = new DoubleSolenoid(10,map.CLIMB_UP_SULLY_1_PORT,map.CLIMB_UP_SULLY_1_PORT+1);
+    climbUpSully2 = new DoubleSolenoid(10,map.CLIMB_UP_SULLY_2_PORT,map.CLIMB_UP_SULLY_2_PORT+1);
+    */
     limitIntake = new DigitalInput(map.LIMIT_INTAKE_PORT);
 
     imu = new AHRS(SPI.Port.kMXP);
@@ -168,8 +264,9 @@ public class Robot extends TimedRobot {
     colorMatcher.addColorMatch(kRedTarget);
     colorMatcher.addColorMatch(kYellowTarget);
 		
-		drive = new DifferentialDrive (leftMotors, rightMotors);
-		drive.setSafetyEnabled(false);    
+		//drive = new DifferentialDrive (leftFront, rightFront);
+    //drive.setSafetyEnabled(false);    
+    //drive.setRightSideInverted(false);
 
     driveStick = new Joystick(map.DRIVESTICK_PORT);
 
@@ -177,8 +274,7 @@ public class Robot extends TimedRobot {
 
     isClose = false;
     gyroIsReset = false; 
-    isAlligningLeft = false;
-    isAlligningRight = false;
+    isAlligning = false;
 
     conveyorIsRunning = false;
     preppingShoot = false;
@@ -187,10 +283,20 @@ public class Robot extends TimedRobot {
 
     checkingForPosCtrl = false;
     checkingForRotCtrl = false;
+
+    targetIsInframe = false;
+
+    isHighGear = false;
+    colorWheelArmIsRaised = false;
+ 
+    table = NetworkTableInstance.getDefault().getTable("limelight");
   }
   @Override
   public void robotPeriodic() {
+
+    //visionTracking();
     //for getting color sent during competitions
+    /*
     String gameData;
     gameData = DriverStation.getInstance().getGameSpecificMessage();
     if(gameData.length()>0){
@@ -230,30 +336,31 @@ public class Robot extends TimedRobot {
     else{
       detectedColorString = "Unknown";
     }
+    
     SmartDashboard.putNumber("Red", detectedColor.red);
     SmartDashboard.putNumber("Green", detectedColor.green);
     SmartDashboard.putNumber("Blue", detectedColor.blue);
     SmartDashboard.putString("Detected Color", detectedColorString);
     SmartDashboard.putNumber("BEAM", beamBreakSensor1.getVoltage());
+    */
+   
+    /*
+    rightFront.getFaults(faultsR);
+    leftFront.getFaults(faultsL);
 
-    if(driveStick.getRawButton(map.DRIVE_STICK_INTAKE)){
-      if(!intakeIsRunning){
-        intake(true);
-        intakeIsRunning = true;
-      }
-      else{
-        intake(false);
-        intakeIsRunning = false;
-      }
+    if(faultsR.SensorOutOfPhase){
+      System.out.println("R SENSOR IS OUT OF PHASE!!!");
     }
+    if(faultsL.SensorOutOfPhase){
+      System.out.println("L SENSOR IS OUT OF PHASE!!!");
+    }
+    */
   }
   @Override
   public void autonomousInit() {
     m_autoSelected = m_autoChooser.getSelected();
     System.out.println("Auto selected: " + m_autoSelected);
     resetGyro();   
-    intake(true);
-   
   }
   @Override
   public void autonomousPeriodic() {
@@ -268,19 +375,22 @@ public class Robot extends TimedRobot {
         centerAuto();
         break;
       case kRightAuto:
+        rightAuto();
         break;
       case kLeftAuto:
+        leftAuto();
         break;
       default:
-        // Put default auto code here
         break;
     }
+   // updateConveyor(true);
   }
-
   @Override
   public void teleopPeriodic() {
 
-    //visionTracking();
+    if(driveStick.getRawButton(14)){   
+      setConveyor(.5);
+    }
 
     if(driveStick.getRawAxis(1)<0){
       LEFT_SIGN_MULTIPLIER = 1;
@@ -295,16 +405,14 @@ public class Robot extends TimedRobot {
     else{
       RIGHT_SIGN_MULTIPLIER = -1;
     }
-    
+    /*
     if(driveStick.getRawAxis(4)>.15){
-      shooterTop.set(Math.pow(driveStick.getRawAxis(4),4));
-      shooterBot.set(-Math.pow(driveStick.getRawAxis(4),4));
+      shoot(driveStick.getRawAxis(4));
     }
     else{
-      shooterTop.set(0);
-      shooterBot.set(0);
+      shoot(0);
     }
-    
+    */
     if(!gyroIsReset){
       resetGyro();
       gyroIsReset = true;
@@ -320,11 +428,37 @@ public class Robot extends TimedRobot {
     */
 
     //for operating tank drive
+    /*
     if(driveStick.getRawAxis(1)>.15 || driveStick.getRawAxis(5)>.15 || driveStick.getRawAxis(1)<-.15 || driveStick.getRawAxis(5)<-.15 ){
       drive.tankDrive(Math.pow((driveStick.getRawAxis(1)),4) * LEFT_SIGN_MULTIPLIER, Math.pow((driveStick.getRawAxis(5)),4) * RIGHT_SIGN_MULTIPLIER);
     }
-    else if(!isAlligningRight && !isAlligningLeft){
+    else if(!isAlligning){
       drive.tankDrive(0,0);
+    }
+    */
+
+    if(driveStick.getPOV()==map.DRIVE_STICK_TOGGLE_GEAR){
+      if(!isHighGear){
+        highGearSully1.set(DoubleSolenoid.Value.kForward);
+        highGearSully2.set(DoubleSolenoid.Value.kForward);
+      }
+      else{
+        highGearSully1.set(DoubleSolenoid.Value.kReverse);
+        highGearSully2.set(DoubleSolenoid.Value.kReverse);
+      }
+    }
+    if(driveStick.getPOV()==map.DRIVE_STICK_RAISE_COLOR_WHEEL_ARM){
+      if(!colorWheelArmIsRaised){
+        colorWheelSully.set(DoubleSolenoid.Value.kForward);
+        colorWheelArmIsRaised = true;
+      }
+      else{
+        colorWheelSully.set(DoubleSolenoid.Value.kReverse);
+        colorWheelArmIsRaised = false;
+      }
+    }
+    if(driveStick.getPOV()==map.RELEASE_CLIMBER_SULLY_PORT){
+      deployClimber();
     }
 
     //rot control
@@ -363,27 +497,48 @@ public class Robot extends TimedRobot {
       }
     }
     if(checkingForRotCtrl){
-      //RUN COLOR WHEEL MOTORS
+      colorWheel.set(.5);
       if(detectedColorString.equals(colorChosenForRotCtrl)){
         countOfSameColor++;
       }
       if(countOfSameColor>=7){
-        //STOP COLOR WHEEL MOTORS
+        colorWheel.set(0);
         checkingForRotCtrl = false;
         countOfSameColor = 0;
       }
     }
     if(checkingForPosCtrl){
-      //RUN COLOR WHEEL MOTORS * dirForPosCtrl
+      colorWheel.set(.3 * dirForPosCtrl);
       if(detectedColorString.equals(posCtrlColor)){
-        //STOP COLOR WHEEL MOTORS
+        colorWheel.set(-.1 * dirForPosCtrl);
         checkingForRotCtrl = false;
       }
     }
+    if(driveStick.getRawButton(map.DRIVE_STICK_INTAKE)){
+      if(!intakeIsRunning){
+        intake(true);
+      }
+      else{
+        intake(false);
+      }
+    }
+    //toggle to turn on/off limelight LED
+    if(driveStick.getRawButton(map.DRIVE_STICK_TOGGLE_LED)){
+      //turn off
+      if(table.getEntry("ledMode").getDouble(0)==3){
+        table.getEntry("ledMode").setNumber(1);
+      }
+      //turn on
+      else{
+        table.getEntry("ledMode").setNumber(3);
+      }
+    }
+    //updateConveyor(false);
   }
 
   @Override
   public void testPeriodic() {
+    
   }
 
   public void resetGyro(){
@@ -391,111 +546,162 @@ public class Robot extends TimedRobot {
     imu.reset();
   }
   public void visionTracking(){
-    NetworkTable table = NetworkTableInstance.getDefault().getTable("limelight");
-    NetworkTableEntry tx = table.getEntry("tx");
-    NetworkTableEntry ty = table.getEntry("ty");
-    NetworkTableEntry ta = table.getEntry("ta");
-    NetworkTableEntry ts = table.getEntry("ts");
+
+    tx = table.getEntry("tx");
+    ty = table.getEntry("ty");
+    ta = table.getEntry("ta");
+    ts = table.getEntry("ts");
 
     //read values periodically
-    double x = tx.getDouble(0.0);
-    double y = ty.getDouble(0.0);
-    double area = ta.getDouble(0.0);
-    double skew = ts.getDouble(0.0);
+    vision_x = tx.getDouble(0.0);
+    vision_y = ty.getDouble(0.0);
+    vision_area = ta.getDouble(0.0);
+    vision_skew = ts.getDouble(0.0);
 
     //post to smart dashboard periodically
-    SmartDashboard.putNumber("LimelightX", x);
-    SmartDashboard.putNumber("LimelightY", y);
-    SmartDashboard.putNumber("LimelightArea", area);
-    SmartDashboard.putNumber("LimelightSkew", skew);
+    SmartDashboard.putNumber("LimelightX", vision_x);
+    SmartDashboard.putNumber("LimelightY", vision_y);
+    SmartDashboard.putNumber("LimelightArea", vision_area);
+    SmartDashboard.putNumber("LimelightSkew", vision_skew);
 
     SmartDashboard.putNumber("Angle", imu.getAngle());
 
-    //being alligning once button is clicking based on orientation of robot
-    if(driveStick.getRawButton(2)){
-      if(imu.getAngle()<0){
-        isAlligningRight = true;
-      }
-      else{
-        isAlligningLeft = true;
+    //alligning once button is clicking based on orientation of robot
+    if(driveStick.getRawButton(map.DRIVE_STICK_ALLIGN_LEFT)){   
+      isAlligning = true;
+      if(!allign("Left")){
+        isAlligning = false;
       }
     }
-    if(isAlligningRight){
-      drive.tankDrive(.4,-.4);
-      if(Math.abs(previousSkew-skew)>80){
-        System.out.println("Stoppedqwertyuikolkjhgfxghjhbgfghjhgfcdfghjhgfghjhgvffghj");
-        drive.tankDrive(0,0);
-        isAlligningRight = false;
-        previousSkew = 0;
+    else if(driveStick.getRawButton(map.DRIVE_STICK_ALLIGN_RIGHT)){ 
+      isAlligning = true;  
+      if(!allign("Right")){
+        isAlligning = false;
       }
     }
-    else if(isAlligningLeft){
-      drive.tankDrive(-.4,.4);
-      if(Math.abs(previousSkew-skew)>80){
-        System.out.println("Stoppedqwertyuikolkjhgfxghjhbgfghjhgfcdfghjhgfghjhgvffghj");
-        drive.tankDrive(0,0);
-        isAlligningLeft = false;
-        previousSkew = 0;
-      }
-    }
-    previousArea = area;
-    previousSkew = skew;
   }
-public void centerAuto(){
-  switch(stage){
-    case begin:
-      stage = AutoStage.shootOne;
-      break;
-    case shootOne:
-      shooter(true);
-      countsForShooter++;
-      if(countsForShooter>=150){
-        shooter(false);
-        countsForShooter = 0;
-        stage = AutoStage.turnOne;
-      }
-      break;
-      
-    case turnOne:
-      if(!turnToAngle(-90)){
-      }
-      else{
-        stage = AutoStage.driveOne;
-      }
-      break;
-    case driveOne:
-      if(!driveToDistance(169.95)){
-      }
-      else{
-        stage = AutoStage.turnTwo;
-      }
-      break;
-    case turnTwo:
-      if(!turnToAngle(90)){
-      }
-      else{
-        stage = AutoStage.driveTwo;
-      }
-      break;
-    case driveTwo:
-      if(!driveToDistance(495)){
-        intake(true);
-      }
-      else{
-        intake(false);
-        stage = AutoStage.end;
-      }
-      break;
-    case end:
-      break;
-    default:
-      break;
+  public void rightAuto(){
+    switch(stage){
+      case begin:
+        stage = AutoStage.allign;
+        break;
+      case allign:
+        if(!allign("Left")){
+        }
+        else{
+          stage = AutoStage.shootOne;
+        }
+        break;
+      case shootOne:
+        shoot(1);
+        countsForShooter++;
+        if(countsForShooter>=150){
+          shoot(0);
+          countsForShooter = 0;
+          stage = AutoStage.driveOne;
+        }
+        break;
+      case driveOne:
+        if(!driveToDistance(-90)){
+        }
+        else{
+          stage = AutoStage.end;
+        }
+        break;
+      case end:
+        break;
+      default:
+        break;
+    }
   }
-}
-public boolean driveToDistance(double targetDistance){
-  return false;
-}
-public boolean turnToAngle(double targetAngle){
+  public void centerAuto(){
+    switch(stage){
+      case begin:
+        stage = AutoStage.shootOne;
+        break;
+      case shootOne:
+        shoot(1);
+        countsForShooter++;
+        if(countsForShooter>=150){
+          shoot(0);
+          countsForShooter = 0;
+          stage = AutoStage.turnOne;
+        }
+        break;
+      case turnOne:
+        if(!turnToAngle(-90)){
+        }
+        else{
+          stage = AutoStage.driveOne;
+        }
+        break;
+      case driveOne:
+        if(!driveToDistance(169.95)){
+        }
+        else{
+          stage = AutoStage.turnTwo;
+        }
+        break;
+      case turnTwo:
+        if(!turnToAngle(90)){
+        }
+        else{
+          stage = AutoStage.driveTwo;
+        }
+        break;
+      case driveTwo:
+        if(!driveToDistance(495)){
+          intake(true);
+        }
+        else{
+          intake(false);
+          stage = AutoStage.end;
+        }
+        break;
+      case end:
+        break;
+      default:
+        break;
+    }
+  }
+  public void leftAuto(){
+    switch(stage){
+      case begin:
+        stage = AutoStage.allign;
+        break;
+      case allign:
+        if(!allign("Right")){
+        }
+        else{
+          stage = AutoStage.shootOne;
+        }
+        break;
+      case shootOne:
+        shoot(1);
+        countsForShooter++;
+        if(countsForShooter>=150){
+          shoot(0);
+          countsForShooter = 0;
+          stage = AutoStage.driveOne;
+        }
+        break;
+      case driveOne:
+        if(!driveToDistance(-90)){
+        }
+        else{
+          stage = AutoStage.end;
+        }
+        break;
+      case end:
+        break;
+      default:
+        break;
+    }
+  } 
+  public boolean driveToDistance(double targetDistance){
+    return false;
+  }
+  public boolean turnToAngle(double targetAngle){
     double currentAngle = imu.getAngle();
     double error = targetAngle - currentAngle;
     double fullSpeedThreshold = 30;
@@ -538,7 +744,7 @@ public boolean turnToAngle(double targetAngle){
   public void updateConveyor(boolean duringAuton){
     //after 3 seconds, ball has been shot
     if(countsForShooter >= 150){//test actual time it takes to shoot ball from falling into ramp
-      shooter(false);
+      shoot(0);
       preppingShoot = false;
       countsForShooter = 0;
     }
@@ -547,24 +753,21 @@ public boolean turnToAngle(double targetAngle){
     }
     if(checkBeam(beamBreakSensor4)){
       //click shoot button
-      if(driveStick.getRawButton(map.DRIVE_STICK_SHOOTER)){
-        shooter(true);
-        //move conveyors
-        conveyorIsRunning = true;
+      if(driveStick.getRawButton(map.DRIVE_STICK_SHOOTER)&&!preppingShoot){
+        shoot(1);
+        setConveyor(1);
         preppingShoot = true;
       }
       //turns on shooter if ball at top spot during auton
       else if(duringAuton&&!preppingShoot){
-        shooter(true);
-        //move conveyors
-        conveyorIsRunning = true;
+        shoot(1);
+        setConveyor(1);
         preppingShoot = true;
       }
     }
     //runs motors if ball in intake cavity and no ball in top spot
-    if(limitIntake.get()&&!checkBeam(beamBreakSensor4)){
-      //move conveyors
-      conveyorIsRunning = true;
+    if(driveStick.getPOV() == 90 && !checkBeam(beamBreakSensor4)){//CHANGE BACK TO limitIntake.get()
+      setConveyor(1);
     }
     if(conveyorIsRunning){
       //delay for when balls initially move
@@ -572,34 +775,89 @@ public boolean turnToAngle(double targetAngle){
       if(countsForDelay>=50){
         //stops conveyor when any sensor is triggered
         if(checkBeam(beamBreakSensor4)||checkBeam(beamBreakSensor3)||checkBeam(beamBreakSensor2)||checkBeam(beamBreakSensor1)){
-          //stop conveyor
-          conveyorIsRunning = false;
+          setConveyor(0);
           countsForDelay = 0;
         }
       }
     }
   }
-  public void shooter(boolean turnOn){
-    if(turnOn){
 
+  public void setConveyor(double power){
+    if(power>0){
+      conveyorIsRunning = true;
     }
     else{
-
+      conveyorIsRunning = false;
     }
+    belly_1.set(-power);
+    belly_2.set(power);
   }
-  public void intake(boolean turnOn){
-    if(turnOn){
 
+  public void shoot(double power){
+    shooterTop.set(power);
+    shooterBottom.set(-power);
+  }
+
+  public void intake(boolean isOn){
+    if(isOn){
+      intake.set(1);
     }
     else{
-      
+      intake.set(0);
     }
   }
+
   public boolean checkBeam(AnalogInput sensor){
     if(sensor.getVoltage()>0.2){
       return true;
     }
     return false;
+  }
+  
+  public boolean allign(String direction){
+    table.getEntry("ledMode").setNumber(3);
+    int dir;
+    if(direction.equals("Left")){
+      dir = -1;
+    }
+    else{
+      dir = 1;
+    }
+    if(!targetIsInframe){
+      drive.tankDrive(-dir * .4,dir * .4);
+      if(Math.abs(previousSkew-vision_skew)>80){
+        System.out.println("Stoppedqwertyuikolkjhgfxghjhbgfghjhgfcdfghjhgfghjhgvffghj");
+        drive.tankDrive(0,0);
+        previousSkew = 0;
+        targetIsInframe = true;
+      }
+    }
+    previousArea = vision_area;
+    previousSkew = vision_skew;
+
+    if(targetIsInframe){
+      drive.tankDrive(-dir * .4,dir * .4);  
+      if(Math.abs(vision_x)<5){
+        System.out.println("Stoppedqwertyuikolkjhgfxghjhbgfghjhgfcdfghjhgfghjhgvffghj");
+        drive.tankDrive(0,0);
+        table.getEntry("ledMode").setNumber(1);
+        return true;
+      }
+      return false;
+    }
+    return false;
+  }
+  public void deployClimber(){
+    releaseClimberSully.set(DoubleSolenoid.Value.kForward);
+    countsForPiston++;
+    if(countsForPiston>20){
+      climberArm.set(.5);
+      countsForClimberMotor++;
+    }
+    if(countsForClimberMotor>30){
+      climbUpSully1.set(DoubleSolenoid.Value.kForward);
+      climbUpSully2.set(DoubleSolenoid.Value.kForward);
+    } 
   }
 }
 
