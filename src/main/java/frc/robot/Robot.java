@@ -145,11 +145,12 @@ public class Robot extends TimedRobot {
   String detectedColorString;
 
   //sensors
-  DigitalInput limitIntake;
-  AnalogInput beamBreakSensor1;
-  AnalogInput beamBreakSensor2;
-  AnalogInput beamBreakSensor3;
-  AnalogInput beamBreakSensor4;
+  DigitalInput beamBreakSensor0;
+  DigitalInput beamBreakSensor1;
+  DigitalInput beamBreakSensor2;
+  DigitalInput beamBreakSensor3;
+  DigitalInput beamBreakSensor4;
+
 
   //vision data
   NetworkTable table;
@@ -179,6 +180,12 @@ public class Robot extends TimedRobot {
   //climber
   int countsForPiston = 0;
   int countsForClimberMotor = 0;
+
+  boolean beamHit = false;
+  int numOfBalls = 0;
+  boolean countedBalls = false;
+  boolean shooting = false;
+
   
   @Override
   public void robotInit() {
@@ -217,6 +224,7 @@ public class Robot extends TimedRobot {
     leftBack.setInverted(TalonFXInvertType.FollowMaster);
     */
 
+    
     belly_1 = new CANSparkMax(map.BELLY_1_MOTOR_PORT, MotorType.kBrushless);
     belly_2 = new CANSparkMax(map.BELLY_2_MOTOR_PORT, MotorType.kBrushless);
     shooterTop = new CANSparkMax(map.TOP_SHOOTER_MOTOR_PORT, MotorType.kBrushless);
@@ -238,11 +246,12 @@ public class Robot extends TimedRobot {
     colorWheel.restoreFactoryDefaults();
     climberArm.restoreFactoryDefaults();
     */
-  
-    beamBreakSensor1 = new AnalogInput(map.BBS_1_PORT);
-    beamBreakSensor2 = new AnalogInput(map.BBS_2_PORT);
-    beamBreakSensor3 = new AnalogInput(map.BBS_3_PORT);
-    beamBreakSensor4 = new AnalogInput(map.BBS_4_PORT);
+    beamBreakSensor0 = new DigitalInput(map.BBS_0_PORT);
+    beamBreakSensor1 = new DigitalInput(map.BBS_1_PORT);
+    beamBreakSensor2 = new DigitalInput(map.BBS_2_PORT);
+    beamBreakSensor3 = new DigitalInput(map.BBS_3_PORT);
+    beamBreakSensor4 = new DigitalInput(map.BBS_4_PORT);
+    
 
     //compressor = new Compressor(map.COMPRESSOR_PORT);
 
@@ -255,8 +264,6 @@ public class Robot extends TimedRobot {
     climbUpSully1 = new DoubleSolenoid(10,map.CLIMB_UP_SULLY_1_PORT,map.CLIMB_UP_SULLY_1_PORT+1);
     climbUpSully2 = new DoubleSolenoid(10,map.CLIMB_UP_SULLY_2_PORT,map.CLIMB_UP_SULLY_2_PORT+1);
     */
-    limitIntake = new DigitalInput(map.LIMIT_INTAKE_PORT);
-
     imu = new AHRS(SPI.Port.kMXP);
 
     colorMatcher.addColorMatch(kBlueTarget);
@@ -355,6 +362,14 @@ public class Robot extends TimedRobot {
       System.out.println("L SENSOR IS OUT OF PHASE!!!");
     }
     */
+    
+    //System.out.println("BBS0" + beamBreakSensor0.get());  
+    System.out.println("BBS1" + beamBreakSensor1.get());   
+    //System.out.println("BBS2" + beamBreakSensor2.get());  
+   // System.out.println("BBS3" + beamBreakSensor3.get());  
+   // System.out.println("BBS4" + beamBreakSensor4.get());  
+  
+    
   }
   @Override
   public void autonomousInit() {
@@ -383,15 +398,34 @@ public class Robot extends TimedRobot {
       default:
         break;
     }
-   // updateConveyor(true);
+   updateConveyor(true);
   }
   @Override
   public void teleopPeriodic() {
-
-    if(driveStick.getRawButton(14)){   
-      setConveyor(.5);
+    
+    if(driveStick.getRawButton(14)){
+      setConveyor(-.5);
+      intake.set(-.5);
     }
-
+    
+    /*
+    if(!beamBreakSensor1.get()){
+      countBB++;
+      System.out.println(countBB);
+    }
+    
+    if(!beamHit){
+      setConveyor(1);
+      intake(true);
+    }
+      
+    if(!beamBreakSensor1.get()){
+      beamHit = true;
+      setConveyor(0);
+      intake(false);
+    }
+    */
+       
     if(driveStick.getRawAxis(1)<0){
       LEFT_SIGN_MULTIPLIER = 1;
     }
@@ -429,13 +463,14 @@ public class Robot extends TimedRobot {
 
     //for operating tank drive
     /*
-    if(driveStick.getRawAxis(1)>.15 || driveStick.getRawAxis(5)>.15 || driveStick.getRawAxis(1)<-.15 || driveStick.getRawAxis(5)<-.15 ){
+    if(Math.abs(driveStick.getRawAxis(1))>.15 || Math.abs(driveStick.getRawAxis(5))>.15){
       drive.tankDrive(Math.pow((driveStick.getRawAxis(1)),4) * LEFT_SIGN_MULTIPLIER, Math.pow((driveStick.getRawAxis(5)),4) * RIGHT_SIGN_MULTIPLIER);
     }
     else if(!isAlligning){
       drive.tankDrive(0,0);
     }
     */
+
 
     if(driveStick.getPOV()==map.DRIVE_STICK_TOGGLE_GEAR){
       if(!isHighGear){
@@ -533,7 +568,7 @@ public class Robot extends TimedRobot {
         table.getEntry("ledMode").setNumber(3);
       }
     }
-    //updateConveyor(false);
+    updateConveyor(false);
   }
 
   @Override
@@ -699,6 +734,7 @@ public class Robot extends TimedRobot {
     }
   } 
   public boolean driveToDistance(double targetDistance){
+
     return false;
   }
   public boolean turnToAngle(double targetAngle){
@@ -741,9 +777,47 @@ public class Robot extends TimedRobot {
       return false;
     }
   }
+  public void countBalls(){
+    if(!beamBreakSensor4.get()){
+      numOfBalls = 4;
+    }
+    else if(!beamBreakSensor3.get()){
+      numOfBalls = 3;
+    }
+    else if(!beamBreakSensor2.get()){
+      numOfBalls = 2;
+    }
+    else if(!beamBreakSensor1.get()){
+      numOfBalls = 1;
+    } 
+    else{
+      numOfBalls = 0;
+    }
+    countedBalls = true;        
+  }
   public void updateConveyor(boolean duringAuton){
+    if(driveStick.getRawButton(map.DRIVE_STICK_SHOOTER)&&!shooting){
+      shoot(.2);
+      countsForShooter++;
+      if(countsForShooter>=50){
+        shooting = true;
+        countsForShooter = 0;
+      }
+    }
+    if(shooting){
+      intake(true);   
+      belly_1.set(-.5);
+      belly_2.set(.5);
+      if(!beamBreakSensor4.get()){
+        shooting = false;
+        belly_1.set(0);
+        belly_2.set(0);
+        shoot(0);
+      }
+    }
+    /*
     //after 3 seconds, ball has been shot
-    if(countsForShooter >= 150){//test actual time it takes to shoot ball from falling into ramp
+    if(countsForShooter >= 50){//test actual time it takes to shoot ball from falling into ramp
       shoot(0);
       preppingShoot = false;
       countsForShooter = 0;
@@ -751,42 +825,96 @@ public class Robot extends TimedRobot {
     if(preppingShoot){
       countsForShooter++;
     }
-    if(checkBeam(beamBreakSensor4)){
+    if(!beamBreakSensor4.get()){
       //click shoot button
       if(driveStick.getRawButton(map.DRIVE_STICK_SHOOTER)&&!preppingShoot){
-        shoot(1);
-        setConveyor(1);
+        shoot(.1);
+        setConveyor(.5);
+        intake(true);
         preppingShoot = true;
       }
       //turns on shooter if ball at top spot during auton
       else if(duringAuton&&!preppingShoot){
-        shoot(1);
-        setConveyor(1);
+        shoot(.1);
+        setConveyor(.5);
+        intake(true);
         preppingShoot = true;
       }
     }
-    //runs motors if ball in intake cavity and no ball in top spot
-    if(driveStick.getPOV() == 90 && !checkBeam(beamBreakSensor4)){//CHANGE BACK TO limitIntake.get()
-      setConveyor(1);
-    }
-    if(conveyorIsRunning){
-      //delay for when balls initially move
-      countsForDelay++;
-      if(countsForDelay>=50){
-        //stops conveyor when any sensor is triggered
-        if(checkBeam(beamBreakSensor4)||checkBeam(beamBreakSensor3)||checkBeam(beamBreakSensor2)||checkBeam(beamBreakSensor1)){
-          setConveyor(0);
+    */
+    if((!conveyorIsRunning&&!beamBreakSensor0.get())){
+      if(beamBreakSensor4.get()){
+        countsForDelay++;
+        if(countsForDelay>=10){
+          setConveyor(.5);
+          intake(true);
+          countsForDelay = 0;
+        }
+      }
+      else{
+        countsForDelay++;
+        if(countsForDelay>=10){
+          intake(false);
           countsForDelay = 0;
         }
       }
     }
+    if(conveyorIsRunning){
+      System.out.println("Conveyor is Running");
+      if(numOfBalls==4){
+        countsForDelay++;
+        if(countsForDelay>=5){
+          if(!beamBreakSensor4.get()){
+            setConveyor(0);
+            intake(false);
+            countsForDelay = 0;
+          }
+        }
+      }
+      else if(numOfBalls==3){
+        if(!beamBreakSensor4.get()){
+          countsForDelay++;
+          if(countsForDelay>=3){
+            intake(false);
+            setConveyor(0);
+            countsForDelay = 0;
+          }
+        }
+      }
+      else if(numOfBalls==2){
+        if(!beamBreakSensor3.get()){
+          intake(false);
+          setConveyor(0);
+        }
+      }
+      else if(numOfBalls==1){
+        if(!beamBreakSensor2.get()){
+          intake(false);
+          setConveyor(0);
+        }
+      }
+      else{
+        if(!beamBreakSensor1.get()){
+          setConveyor(-.5);
+          intake(false);
+          countsForDelay++;
+          if(countsForDelay>=3){
+            intake(false);
+            setConveyor(0);
+            countsForDelay = 0;
+          }
+        }
+      }
+    }
   }
-
   public void setConveyor(double power){
     if(power>0){
+      System.out.println("Conveyor ran");
+      countBalls();
       conveyorIsRunning = true;
     }
     else{
+      countedBalls = false;
       conveyorIsRunning = false;
     }
     belly_1.set(-power);
@@ -800,18 +928,11 @@ public class Robot extends TimedRobot {
 
   public void intake(boolean isOn){
     if(isOn){
-      intake.set(1);
+      intake.set(.5);
     }
     else{
       intake.set(0);
     }
-  }
-
-  public boolean checkBeam(AnalogInput sensor){
-    if(sensor.getVoltage()>0.2){
-      return true;
-    }
-    return false;
   }
   
   public boolean allign(String direction){
@@ -854,7 +975,7 @@ public class Robot extends TimedRobot {
       climberArm.set(.5);
       countsForClimberMotor++;
     }
-    if(countsForClimberMotor>30){
+    if(countsForClimberMotor>30){//INSTEAD OF TIME USE ENCODER
       climbUpSully1.set(DoubleSolenoid.Value.kForward);
       climbUpSully2.set(DoubleSolenoid.Value.kForward);
     } 
